@@ -37,8 +37,7 @@ export default function SignUpPage() {
     }
 
     setSuccessMsg('Account created! Redirecting…');
-    // optional: redirect after a short pause
-    setTimeout(() => router.push('/'), 800);
+    setTimeout(() => router.push('/profile'), 800);
   };
 
   return (
