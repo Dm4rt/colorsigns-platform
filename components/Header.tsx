@@ -14,6 +14,7 @@ export default function Header() {
                     <Link href="/services" className="text-white-600 hover:text-blue-500">Services</Link>
                     <Link href="/about" className="text-white-600 hover:text-blue-500">About Us</Link>
                     <Link href="/contact" className="text-white-600 hover:text-blue-500">Contact Us</Link>
+                    <Link href="/signup" className="text-white-600 hover:text-blue-500">Sign Up</Link>
                     {/* Add links to About and Contact pages later */}
                 </div>
             </nav>

@@ -1,4 +1,4 @@
-export default function AboutPage() { // Remember to change the function name!
+export default function ContactPage() { // Remember to change the function name!
   return (
     <main className="flex min-h-screen flex-col items-center p-24">
       <h1 className="text-4xl font-bold">Contact Us</h1>
