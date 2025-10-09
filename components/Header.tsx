@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 
@@ -16,8 +17,19 @@ export default function Header() {
   return (
     <header className="bg-[#b68460] shadow-md">
       <nav className="container mx-auto px-6 py-4 flex justify-between items-center">
-        <Link href="/" className="text-2xl font-bold text-white">
-          Color Signs
+        {/* Logo Link */}
+        <Link href="/" className="flex items-center">
+          <Image
+            src="/logo.png"
+            alt="Color Signs Logo"
+            width={40}
+            height={40}
+            className="h-10 w-auto object-contain"
+            priority
+          />
+          <span className="text-2xl font-bold text-white hidden sm:inline">
+            Color Signs
+          </span>
         </Link>
 
         <div className="space-x-4">
