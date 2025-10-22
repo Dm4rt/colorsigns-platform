@@ -8,6 +8,7 @@ export default function AdminRoute({ children }: { children: React.ReactNode }) 
   const { user, userDoc, loading } = useAuth();
   const router = useRouter();
 
+  // Redirects must run AFTER render → inside useEffect
   useEffect(() => {
     if (!loading) {
       if (!user) {
@@ -18,6 +19,7 @@ export default function AdminRoute({ children }: { children: React.ReactNode }) 
     }
   }, [user, userDoc, loading, router]);
 
+  // While we don't yet know role, block rendering with a spinner
   if (loading) {
     return (
       <div className="flex h-screen items-center justify-center">
@@ -26,7 +28,7 @@ export default function AdminRoute({ children }: { children: React.ReactNode }) 
     );
   }
 
-  // Only render children if user is loaded and admin
+  // Only render children for confirmed admins
   if (!user || userDoc?.role !== 'admin') return null;
 
   return <>{children}</>;

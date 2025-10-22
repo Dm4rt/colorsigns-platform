@@ -9,11 +9,13 @@ type UserDoc = {
   username?: string;
   photoURL?: string | null;
   createdAt?: Timestamp | number | string;
+  role?: 'admin' | 'user';
 };
 
 type AuthCtx = {
   user: User | null;
   userDoc: UserDoc | null;
+  // 'loading' now means: auth state + first userDoc snapshot are ready
   loading: boolean;
   signOutUser: () => Promise<void>;
 };
@@ -34,20 +36,44 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubAuth = onAuthStateChanged(auth, (u) => {
+    let unsubscribeUserDoc: (() => void) | null = null;
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
+      // Clean up any prior userDoc listener when auth state changes
+      if (unsubscribeUserDoc) {
+        unsubscribeUserDoc();
+        unsubscribeUserDoc = null;
+      }
+
       setUser(u);
-      setLoading(false);
+
+      // If logged out: we can finish loading immediately
       if (!u) {
         setUserDoc(null);
-      } else {
-        // live updates to /users/{uid}
-        const unsubDoc = onSnapshot(doc(db, 'users', u.uid), (snap) => {
-          setUserDoc(snap.exists() ? (snap.data() as UserDoc) : null);
-        });
-        return () => unsubDoc();
+        setLoading(false);
+        return;
       }
+
+      // If logged in: keep loading=true until FIRST userDoc snapshot arrives
+      setLoading(true);
+      const ref = doc(db, 'users', u.uid);
+      unsubscribeUserDoc = onSnapshot(
+        ref,
+        (snap) => {
+          setUserDoc(snap.exists() ? (snap.data() as UserDoc) : null);
+          setLoading(false);
+        },
+        () => {
+          setUserDoc(null);
+          setLoading(false);
+        }
+      );
     });
-    return () => unsubAuth();
+
+    return () => {
+      if (unsubscribeUserDoc) unsubscribeUserDoc();
+      unsubscribeAuth();
+    };
   }, [auth, db]);
 
   const signOutUser = async () => {

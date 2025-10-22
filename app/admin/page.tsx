@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import AdminRoute from '@/components/AdminRoute';
 import { useAuth } from '@/components/auth/AuthProvider';
 
@@ -17,11 +18,35 @@ export default function AdminPage() {
           Role: <span className="font-mono text-emerald-400">{userDoc?.role ?? 'unknown'}</span>
         </p>
 
-        <div className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-6 w-full max-w-md text-center">
+        <div className="bg-white/10 backdrop-blur-sm border border-white/20 rounded-xl p-6 w-full max-w-md text-center mb-8">
           <p>This is a protected admin-only page.</p>
           <p className="text-sm mt-2 text-emerald-400">
             If you can see this, your role system works!
           </p>
+        </div>
+
+        {/* Admin Navigation Buttons */}
+        <div className="flex flex-wrap justify-center gap-4">
+          <Link
+            href="/admin/orders"
+            className="rounded-md bg-emerald-600 px-5 py-2 font-semibold hover:brightness-110"
+          >
+            Manage Orders
+          </Link>
+
+          <Link
+            href="/admin/users"
+            className="rounded-md bg-white/10 px-5 py-2 font-semibold hover:bg-white/20"
+          >
+            Manage Users (future)
+          </Link>
+
+          <Link
+            href="/admin/settings"
+            className="rounded-md bg-white/10 px-5 py-2 font-semibold hover:bg-white/20"
+          >
+            Settings (future)
+          </Link>
         </div>
       </main>
     </AdminRoute>
