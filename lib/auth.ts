@@ -28,8 +28,10 @@ export async function signUpUser(username: string, email: string, password: stri
       username,
       email,
       createdAt: serverTimestamp(),
+      role: 'user',
       photoURL: null,
-    });
+    }, { merge: true }
+    );
 
     return { success: true, error: null };
   } catch (e) {
