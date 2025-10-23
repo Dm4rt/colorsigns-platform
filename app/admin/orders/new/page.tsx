@@ -1,20 +1,20 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import AdminRoute from '@/components/AdminRoute';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { createOrder } from '@/lib/orders';
 import type { OrderItem } from '@/lib/orderTypes';
-import AdminRoute from '@/components/AdminRoute';
-import { useRouter } from 'next/navigation';
 import { uploadOrderImage } from '@/lib/storage';
+
+type LocalImg = { file: File; url: string };
 
 export default function NewOrderPage() {
   const { user } = useAuth();
   const router = useRouter();
 
-  const [assignedToUid, setAssignedToUid] = useState<string | null>(null); // optional, keep if you added admin list here
-  const [assignedToName, setAssignedToName] = useState<string | null>(null); // optional
-
+  // ---- base form ----
   const [customerName, setCustomerName] = useState('');
   const [company, setCompany] = useState('');
   const [email, setEmail] = useState('');
@@ -28,10 +28,6 @@ export default function NewOrderPage() {
   const [total, setTotal] = useState<number | undefined>(undefined);
   const [deposit, setDeposit] = useState<number | undefined>(undefined);
 
-  // images chosen before submit
-  const [images, setImages] = useState<File[]>([]);
-  const [creating, setCreating] = useState(false);
-
   const balance = useMemo(() => {
     if (typeof total === 'number' && typeof deposit === 'number') {
       return Math.max(total - deposit, 0);
@@ -39,6 +35,14 @@ export default function NewOrderPage() {
     return undefined;
   }, [total, deposit]);
 
+  // ---- images (only tiny thumbs) ----
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [images, setImages] = useState<LocalImg[]>([]);
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+
+  const [creating, setCreating] = useState(false);
+
+  // items helpers
   const addItem = () =>
     setItems((arr) => [
       ...arr,
@@ -50,20 +54,55 @@ export default function NewOrderPage() {
   const updateItem = (i: number, key: keyof OrderItem, val: any) =>
     setItems((arr) => arr.map((it, idx) => (idx === i ? { ...it, [key]: val } : it)));
 
-  // --- image helpers ---
-
+  // image helpers
   function addImagesFromInput(files: FileList | null) {
     if (!files) return;
-    const list = Array.from(files);
-    // basic client-side type check
-    setImages((prev) => [...prev, ...list.filter((f) => f.type.startsWith('image/'))]);
+    const list = Array.from(files).filter((f) => f.type.startsWith('image/'));
+    const withUrls = list.map((file) => ({ file, url: URL.createObjectURL(file) }));
+    setImages((prev) => [...prev, ...withUrls]);
   }
 
   function removeImage(idx: number) {
-    setImages((prev) => prev.filter((_, i) => i !== idx));
+    setImages((prev) => {
+      const next = [...prev];
+      const [removed] = next.splice(idx, 1);
+      if (removed) {
+        if (lightboxUrl === removed.url) setLightboxUrl(null);
+        URL.revokeObjectURL(removed.url);
+      }
+      return next;
+    });
   }
 
-  async function resizeToWebP(file: File, maxW = 1600, maxH = 1200, quality = 0.78) {
+  // clear the “Choose Files …” text when none left
+  useEffect(() => {
+    if (images.length === 0 && fileInputRef.current) fileInputRef.current.value = '';
+  }, [images.length]);
+
+  // revoke on unmount
+  useEffect(() => {
+    return () => {
+      images.forEach((it) => URL.revokeObjectURL(it.url));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // close lightbox with ESC
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setLightboxUrl(null);
+    }
+    if (lightboxUrl) window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [lightboxUrl]);
+
+  // resize + webp to keep storage/egress cheap
+  async function resizeToWebP(
+    file: File,
+    maxW = 1600,
+    maxH = 1200,
+    quality = 0.78
+  ): Promise<File> {
     let bitmap: ImageBitmap;
     try {
       bitmap = await createImageBitmap(file);
@@ -75,36 +114,37 @@ export default function NewOrderPage() {
         img.src = URL.createObjectURL(file);
       });
       // @ts-ignore
-      bitmap = imgEl as any;
+      bitmap = imgEl;
     }
 
-    const { width, height } = bitmap;
-    const scale = Math.min(maxW / width, maxH / height, 1);
-    const w = Math.round(width * scale);
-    const h = Math.round(height * scale);
+    const scale = Math.min(maxW / bitmap.width, maxH / bitmap.height, 1);
+    const w = Math.round(bitmap.width * scale);
+    const h = Math.round(bitmap.height * scale);
 
     const canvas = document.createElement('canvas');
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext('2d')!;
-    ctx.drawImage(bitmap as any, 0, 0, w, h);
+    // @ts-ignore
+    ctx.drawImage(bitmap, 0, 0, w, h);
 
     const type = 'image/webp';
-    const blob: Blob = await new Promise((res) => canvas.toBlob((b) => res(b as Blob), type, quality));
-    const nameBase = file.name.replace(/\.[^.]+$/, '');
-    return new File([blob], `${nameBase}.webp`, { type, lastModified: Date.now() });
+    const blob: Blob = await new Promise((res) =>
+      canvas.toBlob((b) => res(b as Blob), type, quality)
+    );
+    const base = file.name.replace(/\.[^.]+$/, '');
+    return new File([blob], `${base}.webp`, { type, lastModified: Date.now() });
   }
 
-  // --- submit ---
-
+  // submit
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
-
-    if (!customerName.trim()) return; // quick guard
+    if (!customerName.trim()) return;
 
     setCreating(true);
     try {
+      // 1) create order
       const orderId = await createOrder({
         customerName,
         company: company || undefined,
@@ -115,15 +155,15 @@ export default function NewOrderPage() {
         deposit,
         balance,
         status: 'placed',
-        assignedToUid: assignedToUid ?? null,
-        assignedToName: assignedToName ?? null,
+        assignedToUid: null,
+        assignedToName: null,
         notes: notes || undefined,
         createdByUid: user.uid,
       });
 
-      // upload images (resize+compress first)
-      for (const f of images) {
-        const small = await resizeToWebP(f, 1600, 1200, 0.78);
+      // 2) upload images after client-side compression
+      for (const it of images) {
+        const small = await resizeToWebP(it.file, 1600, 1200, 0.78);
         await uploadOrderImage(orderId, small, user.uid);
       }
 
@@ -135,12 +175,13 @@ export default function NewOrderPage() {
 
   return (
     <AdminRoute>
-      <main className="max-w-3xl mx-auto p-6 text-white">
-        <h1 className="text-3xl font-bold mb-4">New Order</h1>
+      {/* widen page so fields can breathe */}
+      <main className="max-w-7xl mx-auto p-6 text-white">
+        <h1 className="text-3xl font-bold mb-6">New Order</h1>
 
-        <form onSubmit={onSubmit} className="space-y-6">
-          {/* --- Customer --- */}
-          <div className="grid sm:grid-cols-2 gap-4">
+        <form onSubmit={onSubmit} className="space-y-8">
+          {/* Customer */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
               <label className="block text-sm mb-1">Customer Name*</label>
               <input
@@ -177,57 +218,57 @@ export default function NewOrderPage() {
             </div>
           </div>
 
-          {/* --- Items --- */}
+          {/* Items */}
           <div>
             <label className="block text-sm mb-2">Items</label>
-            <div className="space-y-3">
+            <div className="space-y-4">
               {items.map((it, i) => (
                 <div
                   key={i}
-                  className="grid sm:grid-cols-6 gap-2 items-center bg-white/5 p-3 rounded-lg"
+                  className="grid grid-cols-12 gap-3 items-center bg-white/5 p-3 rounded-lg"
                 >
                   <input
                     type="number"
                     min={1}
                     value={it.qty}
                     onChange={(e) => updateItem(i, 'qty', Number(e.target.value))}
-                    className="px-2 py-1 rounded text-black"
+                    className="px-2 py-1 rounded text-black col-span-12 md:col-span-1"
                     placeholder="Qty"
                   />
                   <input
                     value={it.description}
                     onChange={(e) => updateItem(i, 'description', e.target.value)}
-                    className="px-2 py-1 rounded text-black sm:col-span-2"
+                    className="px-2 py-1 rounded text-black col-span-12 md:col-span-4"
                     placeholder="Description"
                   />
                   <input
                     value={it.material}
                     onChange={(e) => updateItem(i, 'material', e.target.value)}
-                    className="px-2 py-1 rounded text-black"
+                    className="px-2 py-1 rounded text-black col-span-6 md:col-span-2"
                     placeholder="Material"
                   />
                   <input
                     value={it.size}
                     onChange={(e) => updateItem(i, 'size', e.target.value)}
-                    className="px-2 py-1 rounded text-black"
+                    className="px-2 py-1 rounded text-black col-span-6 md:col-span-2"
                     placeholder="Size"
                   />
                   <input
                     value={it.color}
                     onChange={(e) => updateItem(i, 'color', e.target.value)}
-                    className="px-2 py-1 rounded text-black"
+                    className="px-2 py-1 rounded text-black col-span-6 md:col-span-1"
                     placeholder="Color"
                   />
                   <input
                     value={it.printColor}
                     onChange={(e) => updateItem(i, 'printColor', e.target.value)}
-                    className="px-2 py-1 rounded text-black"
+                    className="px-2 py-1 rounded text-black col-span-6 md:col-span-2"
                     placeholder="Print Color"
                   />
                   <button
                     type="button"
                     onClick={() => removeItem(i)}
-                    className="sm:col-span-6 justify-self-end text-sm opacity-80 hover:opacity-100"
+                    className="col-span-12 justify-self-end text-sm opacity-80 hover:opacity-100"
                   >
                     Remove
                   </button>
@@ -237,14 +278,14 @@ export default function NewOrderPage() {
             <button
               type="button"
               onClick={addItem}
-              className="mt-3 rounded-md bg-white/10 px-3 py-1 hover:bg-white/20"
+              className="mt-4 rounded-md bg-white/10 px-3 py-1 hover:bg-white/20"
             >
               + Add Item
             </button>
           </div>
 
-          {/* --- Totals --- */}
-          <div className="grid sm:grid-cols-3 gap-4">
+          {/* Totals */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div>
               <label className="block text-sm mb-1">Total</label>
               <input
@@ -274,12 +315,13 @@ export default function NewOrderPage() {
             </div>
           </div>
 
-          {/* --- Images (before create) --- */}
+          {/* Images: ONLY tiny thumbs + modal */}
           <section>
             <h2 className="text-lg font-semibold mb-2">Images</h2>
             <div className="rounded-xl border border-white/10 bg-white/5 p-4">
               <div className="mb-3 flex items-center gap-3">
                 <input
+                  ref={fileInputRef}
                   type="file"
                   accept="image/*"
                   multiple
@@ -294,34 +336,55 @@ export default function NewOrderPage() {
               {images.length === 0 ? (
                 <div className="opacity-70 text-sm">No images selected.</div>
               ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  {images.map((f, i) => {
-                    const url = URL.createObjectURL(f);
-                    return (
-                      <div key={i} className="relative group">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={url}
-                          alt={f.name}
-                          className="aspect-video object-cover rounded-lg border border-white/10"
-                        />
+                <div className="order-image-grid grid grid-cols-3 sm:grid-cols-6 md:grid-cols-8 gap-2">
+                  {images.map((it, i) => (
+                    <div
+                      key={it.url}
+                      className="rounded-lg border border-white/10 bg-white/5 p-2 flex flex-col items-center"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={it.url}
+                        alt={it.file.name}
+                        className="w-24 h-24 object-cover rounded-md cursor-zoom-in"
+                        onClick={() => setLightboxUrl(it.url)}
+                      />
+                      <div className="mt-2 flex items-center justify-between w-full gap-2">
+                        <span className="text-[11px] truncate opacity-80 flex-1" title={it.file.name}>
+                          {it.file.name}
+                        </span>
                         <button
                           type="button"
                           onClick={() => removeImage(i)}
-                          className="absolute top-1 right-1 text-xs rounded bg-black/60 px-2 py-0.5 opacity-80 hover:opacity-100"
+                          className="text-[11px] rounded-md bg-black/60 hover:bg-black/70 px-2 py-1 whitespace-nowrap"
                         >
                           Remove
                         </button>
-                        <div className="mt-1 text-xs truncate opacity-80">{f.name}</div>
                       </div>
-                    );
-                  })}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
+
+            {lightboxUrl && (
+              <div
+                className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-4"
+                onClick={() => setLightboxUrl(null)}
+              >
+                <div className="max-w-5xl max-h-[90vh] w-full" onClick={(e) => e.stopPropagation()}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={lightboxUrl}
+                    alt="Preview"
+                    className="w-full h-full object-contain rounded-lg shadow-lg"
+                  />
+                </div>
+              </div>
+            )}
           </section>
 
-          {/* --- Notes --- */}
+          {/* Notes */}
           <div>
             <label className="block text-sm mb-1">Notes</label>
             <textarea
