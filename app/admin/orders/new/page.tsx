@@ -8,7 +8,12 @@ import { createOrder } from '@/lib/orders';
 import type { OrderItem } from '@/lib/orderTypes';
 import { uploadOrderImage } from '@/lib/storage';
 
+// Firestore (use your existing app; no separate db export required)
+import { app } from '@/lib/firebase';
+import { getFirestore, collection, getDocs, query, where } from 'firebase/firestore';
+
 type LocalImg = { file: File; url: string };
+type AdminUser = { uid: string; displayName?: string | null; email?: string | null; username?: string | null };
 
 export default function NewOrderPage() {
   const { user } = useAuth();
@@ -35,7 +40,64 @@ export default function NewOrderPage() {
     return undefined;
   }, [total, deposit]);
 
-  // ---- images (only tiny thumbs) ----
+  // ---- assignment (admins) ----
+  const [admins, setAdmins] = useState<AdminUser[]>([]);
+  const [adminsLoading, setAdminsLoading] = useState(true);
+  const [assigneeUid, setAssigneeUid] = useState<string>(''); // '' = Unassigned
+
+  useEffect(() => {
+    const db = getFirestore(app);
+
+    async function fetchAdmins() {
+      setAdminsLoading(true);
+      try {
+        const usersRef = collection(db, 'users');
+
+        // Two common schemas: isAdmin == true OR role == 'admin'
+        const snap1 = await getDocs(query(usersRef, where('isAdmin', '==', true)));
+        const snap2 = await getDocs(query(usersRef, where('role', '==', 'admin')));
+
+        const map = new Map<string, AdminUser>();
+        snap1.forEach((d) =>
+          map.set(d.id, {
+            uid: d.id,
+            displayName: d.get('displayName') ?? null,
+            username: d.get('username') ?? null,
+            email: d.get('email') ?? null,
+          })
+        );
+        snap2.forEach((d) =>
+          map.set(d.id, {
+            uid: d.id,
+            displayName: d.get('displayName') ?? null,
+            username: d.get('username') ?? null,
+            email: d.get('email') ?? null,
+          })
+        );
+
+        const list = Array.from(map.values()).sort((a, b) => {
+          const an = a.displayName || a.username || a.email || a.uid;
+          const bn = b.displayName || b.username || b.email || b.uid;
+          return an.localeCompare(bn);
+        });
+        setAdmins(list);
+      } catch (e) {
+        console.error('Failed to load admins:', e);
+        setAdmins([]);
+      } finally {
+        setAdminsLoading(false);
+      }
+    }
+
+    fetchAdmins();
+  }, []);
+
+  const selectedAssignee = useMemo(
+    () => admins.find((a) => a.uid === assigneeUid) || null,
+    [admins, assigneeUid]
+  );
+
+  // ---- images (tiny thumbs + lightbox) ----
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [images, setImages] = useState<LocalImg[]>([]);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
@@ -79,7 +141,7 @@ export default function NewOrderPage() {
     if (images.length === 0 && fileInputRef.current) fileInputRef.current.value = '';
   }, [images.length]);
 
-  // revoke on unmount
+  // revoke URLs on unmount
   useEffect(() => {
     return () => {
       images.forEach((it) => URL.revokeObjectURL(it.url));
@@ -155,8 +217,13 @@ export default function NewOrderPage() {
         deposit,
         balance,
         status: 'placed',
-        assignedToUid: null,
-        assignedToName: null,
+        assignedToUid: selectedAssignee ? selectedAssignee.uid : null,
+        assignedToName: selectedAssignee
+          ? selectedAssignee.displayName ||
+            selectedAssignee.username ||
+            selectedAssignee.email ||
+            selectedAssignee.uid
+          : null,
         notes: notes || undefined,
         createdByUid: user.uid,
       });
@@ -175,7 +242,6 @@ export default function NewOrderPage() {
 
   return (
     <AdminRoute>
-      {/* widen page so fields can breathe */}
       <main className="max-w-7xl mx-auto p-6 text-white">
         <h1 className="text-3xl font-bold mb-6">New Order</h1>
 
@@ -216,6 +282,36 @@ export default function NewOrderPage() {
                 onChange={(e) => setPhone(e.target.value)}
               />
             </div>
+          </div>
+
+          {/* Assign To */}
+          <div>
+            <label className="block text-sm mb-1">Assign To</label>
+            <select
+              className="w-full md:w-80 rounded-md px-3 py-2 text-black"
+              value={assigneeUid}
+              onChange={(e) => setAssigneeUid(e.target.value)}
+              disabled={adminsLoading}
+            >
+              <option value="">Unassigned</option>
+              {admins.map((a) => (
+                <option key={a.uid} value={a.uid}>
+                  {a.displayName || a.username || a.email || a.uid}
+                </option>
+              ))}
+            </select>
+            {!adminsLoading && selectedAssignee && (
+              <p className="text-xs opacity-80 mt-1">
+                Will save as:{' '}
+                <span className="font-semibold">
+                  {selectedAssignee.displayName ||
+                    selectedAssignee.username ||
+                    selectedAssignee.email ||
+                    selectedAssignee.uid}
+                </span>
+              </p>
+            )}
+            {adminsLoading && <p className="text-xs opacity-70 mt-1">Loading admins…</p>}
           </div>
 
           {/* Items */}
@@ -315,7 +411,7 @@ export default function NewOrderPage() {
             </div>
           </div>
 
-          {/* Images: ONLY tiny thumbs + modal */}
+          {/* Images (tiny grid + lightbox) */}
           <section>
             <h2 className="text-lg font-semibold mb-2">Images</h2>
             <div className="rounded-xl border border-white/10 bg-white/5 p-4">
