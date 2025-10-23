@@ -6,6 +6,21 @@ import AdminRoute from '@/components/AdminRoute';
 import { getOrder, advanceStatus, updateOrder } from '@/lib/orders';
 import type { Order, OrderItem, OrderStatus } from '@/lib/orderTypes';
 import { ORDER_FLOW } from '@/lib/orderTypes';
+import { uploadOrderImage } from '@/lib/storage';
+import { useAuth } from '@/components/auth/AuthProvider';
+
+// Admin lookup (from /users where role == 'admin') + files subscription
+import { app } from '@/lib/firebase';
+import {
+  getFirestore,
+  collection,
+  query as fbQuery,
+  where,
+  getDocs,
+  Timestamp,
+  onSnapshot,
+  orderBy,
+} from 'firebase/firestore';
 
 function nextStatus(current: Order['status']) {
   const i = ORDER_FLOW.indexOf(current);
@@ -13,14 +28,31 @@ function nextStatus(current: Order['status']) {
   return ORDER_FLOW[i + 1];
 }
 
+type OrderFile = {
+  id: string;
+  name: string;
+  url: string;
+  size?: number;
+  path?: string;
+  uploadedByUid?: string;
+  createdAt?: any;
+};
+
 export default function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const { user } = useAuth();
 
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState(false);
+
+  // admins to assign to
+  const [admins, setAdmins] = useState<{ uid: string; username: string }[]>([]);
+
+  // order files (images)
+  const [files, setFiles] = useState<OrderFile[]>([]);
 
   // form state (only used in editing mode)
   const [form, setForm] = useState<{
@@ -33,14 +65,45 @@ export default function OrderDetailPage() {
     deposit?: number;
     notes?: string;
     status: OrderStatus;
+    assignedToUid: string | null;
+    assignedToName: string | null;
   } | null>(null);
 
+  // Load order
   useEffect(() => {
     (async () => {
       const o = await getOrder(id);
       setOrder(o);
       setLoading(false);
     })();
+  }, [id]);
+
+  // Load admins (users.role == 'admin')
+  useEffect(() => {
+    (async () => {
+      const db = getFirestore(app);
+      const qAdmins = fbQuery(collection(db, 'users'), where('role', '==', 'admin'));
+      const snap = await getDocs(qAdmins);
+      setAdmins(
+        snap.docs.map((d) => ({
+          uid: d.id,
+          username: (d.data().username as string) || 'Admin',
+        }))
+      );
+    })();
+  }, []);
+
+  // Live subscribe to files subcollection for this order
+  useEffect(() => {
+    const db = getFirestore(app);
+    const colRef = collection(db, 'orders', id, 'files');
+    const q = fbQuery(colRef, orderBy('createdAt', 'desc'));
+    const unsub = onSnapshot(q, (snap) => {
+      setFiles(
+        snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as OrderFile[]
+      );
+    });
+    return () => unsub();
   }, [id]);
 
   // compute payment view
@@ -66,6 +129,8 @@ export default function OrderDetailPage() {
       deposit: order.deposit,
       notes: order.notes,
       status: order.status,
+      assignedToUid: order.assignedToUid ?? null,
+      assignedToName: order.assignedToName ?? null,
     });
     setEditing(true);
   };
@@ -104,7 +169,11 @@ export default function OrderDetailPage() {
   const save = async () => {
     if (!order || !form) return;
     setSaving(true);
-    // optional: recompute balance server-side in the future; for now just store total/deposit
+
+    // If assignment changed, stamp assignedAt
+    const assignmentChanged =
+      (order.assignedToUid ?? null) !== (form.assignedToUid ?? null);
+
     await updateOrder(order.id, {
       customerName: form.customerName,
       company: form.company || undefined,
@@ -115,7 +184,13 @@ export default function OrderDetailPage() {
       deposit: form.deposit,
       notes: form.notes || undefined,
       status: form.status,
+      assignedToUid: form.assignedToUid ?? null,
+      assignedToName: form.assignedToName ?? null,
+      assignedAt: assignmentChanged
+        ? (Timestamp.now() as any)
+        : ((order as any).assignedAt ?? null),
     });
+
     // reflect locally
     setOrder({
       ...order,
@@ -128,10 +203,69 @@ export default function OrderDetailPage() {
       deposit: form.deposit,
       notes: form.notes || undefined,
       status: form.status,
+      assignedToUid: form.assignedToUid ?? null,
+      assignedToName: form.assignedToName ?? null,
+      assignedAt: assignmentChanged
+        ? (Timestamp.now() as any)
+        : ((order as any).assignedAt ?? null),
     });
+
     setSaving(false);
     setEditing(false);
   };
+
+  // ---- Images panel helpers ----
+
+  // Resize + compress to WebP ~1600px max dimension
+  async function resizeToWebP(file: File, maxW = 1600, maxH = 1600, quality = 0.78) {
+    // createImageBitmap is fast and memory-friendly; fallback to HTMLImageElement if needed
+    let bitmap: ImageBitmap;
+    try {
+      bitmap = await createImageBitmap(file);
+    } catch {
+      // fallback
+      const imgEl = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.src = URL.createObjectURL(file);
+      });
+      // @ts-ignore - cast HTMLElement to bitmap-like for drawing
+      bitmap = imgEl as any;
+    }
+
+    const { width, height } = bitmap;
+    const scale = Math.min(maxW / width, maxH / height, 1);
+    const w = Math.round(width * scale);
+    const h = Math.round(height * scale);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(bitmap as any, 0, 0, w, h);
+
+    const type = 'image/webp';
+    const blob: Blob = await new Promise((res) => canvas.toBlob((b) => res(b as Blob), type, quality));
+    const nameBase = file.name.replace(/\.[^.]+$/, '');
+    return new File([blob], `${nameBase}.webp`, { type, lastModified: Date.now() });
+  }
+
+  async function handleImageUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (!f || !order || !user) return;
+    setSaving(true);
+    try {
+      const small = await resizeToWebP(f, 1600, 1200, 0.78);
+      await uploadOrderImage(order.id, small, user.uid);
+      // files list will auto-refresh via onSnapshot
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSaving(false);
+      e.currentTarget.value = '';
+    }
+  }
 
   return (
     <AdminRoute>
@@ -182,14 +316,22 @@ export default function OrderDetailPage() {
         ) : !editing ? (
           <>
             {/* SUMMARY (read-only) */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
               <div className="rounded-xl border border-white/10 bg-white/5 p-4">
                 <div className="text-sm opacity-80">Order ID</div>
                 <div className="font-mono break-all">{order.id}</div>
               </div>
               <div className="rounded-xl border border-white/10 bg-white/5 p-4">
                 <div className="text-sm opacity-80">Workflow Status</div>
-                <div className="font-semibold capitalize">{order.status.replace(/_/g, ' ')}</div>
+                <div className="font-semibold capitalize">
+                  {order.status.replace(/_/g, ' ')}
+                </div>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+                <div className="text-sm opacity-80">Assigned To</div>
+                <div className="font-semibold">
+                  {order.assignedToName || '— Unassigned —'}
+                </div>
               </div>
               <div className="rounded-xl border border-white/10 bg-white/5 p-4">
                 <div className="text-sm opacity-80">Payment</div>
@@ -259,6 +401,36 @@ export default function OrderDetailPage() {
               </div>
             </section>
 
+            {/* Images (read-only view also shows) */}
+            <section className="mb-6">
+              <h2 className="text-xl font-semibold mb-2">Images</h2>
+              <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+                {files.length === 0 ? (
+                  <div className="opacity-70 text-sm">No images yet.</div>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {files.map((f) => (
+                      <a
+                        key={f.id}
+                        href={f.url}
+                        target="_blank"
+                        className="block group"
+                        rel="noreferrer"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={f.url}
+                          alt={f.name}
+                          className="aspect-video object-cover rounded-lg border border-white/10 group-hover:opacity-90"
+                        />
+                        <div className="mt-1 text-xs truncate opacity-80">{f.name}</div>
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </section>
+
             {/* Notes */}
             <section className="mb-10">
               <h2 className="text-xl font-semibold mb-3">Notes</h2>
@@ -282,11 +454,12 @@ export default function OrderDetailPage() {
         ) : (
           // EDIT MODE
           <>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
               <div className="rounded-xl border border-white/10 bg-white/5 p-4">
                 <div className="text-sm opacity-80">Order ID</div>
                 <div className="font-mono break-all">{order.id}</div>
               </div>
+
               <div className="rounded-xl border border-white/10 bg-white/5 p-4">
                 <div className="text-sm opacity-80">Workflow Status</div>
                 <select
@@ -301,14 +474,36 @@ export default function OrderDetailPage() {
                   ))}
                 </select>
               </div>
+
+              {/* Assignment control */}
+              <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+                <div className="text-sm opacity-80">Assigned Admin</div>
+                <select
+                  value={form!.assignedToUid ?? ''}
+                  onChange={(e) => {
+                    const uid = e.target.value || null;
+                    const name = admins.find((a) => a.uid === uid)?.username ?? null;
+                    updateField('assignedToUid', uid);
+                    updateField('assignedToName', name);
+                  }}
+                  className="mt-1 w-full rounded-md bg-white/90 text-black px-2 py-1"
+                >
+                  <option value="">— Unassigned —</option>
+                  {admins.map((a) => (
+                    <option key={a.uid} value={a.uid}>
+                      {a.username}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div className="rounded-xl border border-white/10 bg-white/5 p-4">
                 <div className="text-sm opacity-80">Payment</div>
-                <div className="opacity-80 text-sm">
-                  (auto: based on Total & Deposit)
-                </div>
+                <div className="opacity-80 text-sm">(auto from Total & Deposit)</div>
               </div>
             </div>
 
+            {/* Customer */}
             <section className="mb-6">
               <h2 className="text-xl font-semibold mb-2">Customer</h2>
               <div className="rounded-xl border border-white/10 bg-white/5 p-4 grid sm:grid-cols-2 gap-3">
@@ -347,6 +542,7 @@ export default function OrderDetailPage() {
               </div>
             </section>
 
+            {/* Totals */}
             <section className="mb-6">
               <h2 className="text-xl font-semibold mb-2">Totals</h2>
               <div className="rounded-xl border border-white/10 bg-white/5 p-4 grid sm:grid-cols-3 gap-3">
@@ -358,7 +554,10 @@ export default function OrderDetailPage() {
                     className="w-full rounded-md bg-white/90 text-black px-3 py-2"
                     value={form!.total ?? ''}
                     onChange={(e) =>
-                      updateField('total', e.target.value === '' ? undefined : Number(e.target.value))
+                      updateField(
+                        'total',
+                        e.target.value === '' ? undefined : Number(e.target.value)
+                      )
                     }
                   />
                 </div>
@@ -391,10 +590,9 @@ export default function OrderDetailPage() {
               </div>
             </section>
 
+            {/* Items */}
             <section className="mb-6">
-              <h2 className="text-xl font-semibold mb-2">
-                Items ({form!.items.length})
-              </h2>
+              <h2 className="text-xl font-semibold mb-2">Items ({form!.items.length})</h2>
               <div className="space-y-3">
                 {form!.items.map((it, i) => (
                   <div
@@ -458,6 +656,49 @@ export default function OrderDetailPage() {
               </button>
             </section>
 
+            {/* Images (edit mode includes uploader) */}
+            <section className="mb-6">
+              <h2 className="text-xl font-semibold mb-2">Images</h2>
+              <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+                <div className="mb-3 flex items-center gap-3">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleImageUpload}
+                    className="block w-full max-w-xs text-sm"
+                  />
+                  <span className="text-xs opacity-70">
+                    Uploads are resized to ~1600px and saved as WebP to reduce costs.
+                  </span>
+                </div>
+
+                {files.length === 0 ? (
+                  <div className="opacity-70 text-sm">No images yet.</div>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {files.map((f) => (
+                      <a
+                        key={f.id}
+                        href={f.url}
+                        target="_blank"
+                        className="block group"
+                        rel="noreferrer"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={f.url}
+                          alt={f.name}
+                          className="aspect-video object-cover rounded-lg border border-white/10 group-hover:opacity-90"
+                        />
+                        <div className="mt-1 text-xs truncate opacity-80">{f.name}</div>
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </section>
+
+            {/* Notes */}
             <section className="mb-10">
               <h2 className="text-xl font-semibold mb-3">Notes</h2>
               <textarea

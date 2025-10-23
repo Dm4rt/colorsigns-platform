@@ -1,3 +1,4 @@
+// lib/orders.ts
 import {
   getFirestore, collection, addDoc, serverTimestamp,
   doc, updateDoc, query, orderBy, getDocs, getDoc
@@ -8,12 +9,26 @@ import type { Order, OrderStatus } from './orderTypes';
 const db = getFirestore(app);
 export const ORDERS_COL = 'orders';
 
-export async function createOrder(data: Omit<Order, 'id' | 'createdAt' | 'updatedAt'>) {
-  const ref = await addDoc(collection(db, ORDERS_COL), {
+// Remove any keys whose value is undefined (Firestore forbids undefined)
+function stripUndefined<T extends Record<string, any>>(obj: T): T {
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) out[k] = v;
+  }
+  return out as T;
+}
+
+export async function createOrder(data: Omit<Order, 'id' | 'createdAt' | 'updatedAt' | 'assignedAt'>) {
+  // If an assignee is provided at creation, stamp assignedAt
+  const payload = {
     ...data,
+    ...(data.assignedToUid ? { assignedAt: serverTimestamp() } : {}),
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
-  });
+  };
+  const clean = stripUndefined(payload);
+
+  const ref = await addDoc(collection(db, ORDERS_COL), clean);
   return ref.id;
 }
 
@@ -38,10 +53,10 @@ export async function advanceStatus(orderId: string, next: OrderStatus) {
 }
 
 export async function updateOrder(orderId: string, patch: Partial<Order>) {
-  // never let client set id/createdAt directly
   const { id, createdAt, ...rest } = patch as any;
-  await updateDoc(doc(db, ORDERS_COL, orderId), {
+  const clean = stripUndefined({
     ...rest,
     updatedAt: serverTimestamp(),
   });
+  await updateDoc(doc(db, ORDERS_COL, orderId), clean);
 }

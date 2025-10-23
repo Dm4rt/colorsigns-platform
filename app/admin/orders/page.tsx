@@ -2,9 +2,14 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import AdminRoute from '@/components/AdminRoute';
 import { listOrders } from '@/lib/orders';
 import { ORDER_FLOW, type Order, type OrderStatus } from '@/lib/orderTypes';
-import AdminRoute from '@/components/AdminRoute';
+
+import { app } from '@/lib/firebase';
+import { getFirestore, collection, query, where, getDocs } from 'firebase/firestore';
+
+type Cmp = '<=' | '=' | '>=';
 
 function shortId(id: string) {
   if (!id) return '';
@@ -30,25 +35,40 @@ function StatusBadge({ s }: { s: OrderStatus }) {
   );
 }
 
-type Cmp = '<=' | '=' | '>=';
-
 export default function OrdersPage() {
   const router = useRouter();
-  const [orders, setOrders] = useState<Order[] | null>(null);
 
-  // Per-column filters
+  const [orders, setOrders] = useState<Order[] | null>(null);
+  const [admins, setAdmins] = useState<{ uid: string; username: string }[]>([]);
+
+  // filters
   const [fId, setFId] = useState('');
   const [fCustomer, setFCustomer] = useState('');
   const [fCompany, setFCompany] = useState('');
+  const [fAssignee, setFAssignee] = useState<'all' | 'unassigned' | string>('all'); // uid|string
   const [fItemsText, setFItemsText] = useState('');
   const [fTotalCmp, setFTotalCmp] = useState<Cmp>('>=');
-  const [fTotalVal, setFTotalVal] = useState<string>('');
+  const [fTotalVal, setFTotalVal] = useState('');
   const [fBalCmp, setFBalCmp] = useState<Cmp>('>=');
-  const [fBalVal, setFBalVal] = useState<string>('');
+  const [fBalVal, setFBalVal] = useState('');
   const [fStatus, setFStatus] = useState<'all' | OrderStatus>('all');
 
   useEffect(() => {
     (async () => setOrders(await listOrders()))();
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      const db = getFirestore(app);
+      const qAdmins = query(collection(db, 'users'), where('role', '==', 'admin'));
+      const snap = await getDocs(qAdmins);
+      setAdmins(
+        snap.docs.map((d) => ({
+          uid: d.id,
+          username: (d.data().username as string) || 'Admin',
+        }))
+      );
+    })();
   }, []);
 
   const cmp = (left: number, op: Cmp, raw: string) => {
@@ -85,7 +105,14 @@ export default function OrdersPage() {
       const balOK = cmp(balance, fBalCmp, fBalVal);
       const statusOK = fStatus === 'all' || o.status === fStatus;
 
-      return idOK && custOK && compOK && itemsOK && totalOK && balOK && statusOK;
+      const assigneeOK =
+        fAssignee === 'all'
+          ? true
+          : fAssignee === 'unassigned'
+          ? !o.assignedToUid
+          : o.assignedToUid === fAssignee;
+
+      return idOK && custOK && compOK && itemsOK && totalOK && balOK && statusOK && assigneeOK;
     });
   }, [
     orders,
@@ -98,12 +125,14 @@ export default function OrdersPage() {
     fBalCmp,
     fBalVal,
     fStatus,
+    fAssignee,
   ]);
 
   const clearFilters = () => {
     setFId('');
     setFCustomer('');
     setFCompany('');
+    setFAssignee('all');
     setFItemsText('');
     setFTotalCmp('>=');
     setFTotalVal('');
@@ -111,6 +140,18 @@ export default function OrdersPage() {
     setFBalVal('');
     setFStatus('all');
   };
+
+  // headers rendered from an array to avoid stray whitespace nodes inside <tr>
+  const headerCells = [
+    { key: 'id', label: 'Order ID' },
+    { key: 'customer', label: 'Customer' },
+    { key: 'company', label: 'Company' },
+    { key: 'assignee', label: 'Assignee' },
+    { key: 'items', label: 'Items' },
+    { key: 'total', label: 'Total' },
+    { key: 'balance', label: 'Balance' },
+    { key: 'status', label: 'Status' },
+  ];
 
   return (
     <AdminRoute>
@@ -133,123 +174,154 @@ export default function OrdersPage() {
           </div>
         </div>
 
-        {/* Loading spinner before we know anything */}
         {!orders ? (
           <div className="flex h-40 items-center justify-center">
             <div className="animate-spin h-8 w-8 border-4 border-emerald-500 border-t-transparent rounded-full" />
           </div>
         ) : (
-          // Always render the table + filter row
           <div className="overflow-x-auto rounded-xl border border-white/10">
             <table className="w-full text-left text-sm">
               <thead className="bg-white/5">
                 <tr>
-                  <th className="px-4 py-3">Order ID</th>
-                  <th className="px-4 py-3">Customer</th>
-                  <th className="px-4 py-3">Company</th>
-                  <th className="px-4 py-3">Items</th>
-                  <th className="px-4 py-3">Total</th>
-                  <th className="px-4 py-3">Balance</th>
-                  <th className="px-4 py-3">Status</th>
+                  {headerCells.map((h) => (
+                    <th key={h.key} className="px-4 py-3">
+                      {h.label}
+                    </th>
+                  ))}
                 </tr>
+
                 <tr className="border-t border-white/10">
-                  <th className="px-4 py-2">
-                    <input
-                      value={fId}
-                      onChange={(e) => setFId(e.target.value)}
-                      placeholder="ID…"
-                      className="w-full rounded-md bg-white/90 text-black px-2 py-1"
-                    />
-                  </th>
-                  <th className="px-4 py-2">
-                    <input
-                      value={fCustomer}
-                      onChange={(e) => setFCustomer(e.target.value)}
-                      placeholder="Customer…"
-                      className="w-full rounded-md bg-white/90 text-black px-2 py-1"
-                    />
-                  </th>
-                  <th className="px-4 py-2">
-                    <input
-                      value={fCompany}
-                      onChange={(e) => setFCompany(e.target.value)}
-                      placeholder="Company…"
-                      className="w-full rounded-md bg-white/90 text-black px-2 py-1"
-                    />
-                  </th>
-                  <th className="px-4 py-2">
-                    <input
-                      value={fItemsText}
-                      onChange={(e) => setFItemsText(e.target.value)}
-                      placeholder="Item text…"
-                      className="w-full rounded-md bg-white/90 text-black px-2 py-1"
-                    />
-                  </th>
-                  <th className="px-4 py-2">
-                    <div className="flex items-center gap-2">
-                      <select
-                        value={fTotalCmp}
-                        onChange={(e) => setFTotalCmp(e.target.value as Cmp)}
-                        className="w-16 rounded-md bg-white/90 text-black px-1 py-1"
-                        title="Compare"
-                      >
-                        <option value="<=">{'\u2264'}</option>
-                        <option value="=">=</option>
-                        <option value=">=">{'\u2265'}</option>
-                      </select>
+                  {[
+                    // Order ID
+                    <th key="f-id" className="px-4 py-2">
                       <input
-                        type="number"
-                        step="0.01"
-                        value={fTotalVal}
-                        onChange={(e) => setFTotalVal(e.target.value)}
-                        placeholder="$"
-                        className="w-28 rounded-md bg-white/90 text-black px-2 py-1"
+                        value={fId}
+                        onChange={(e) => setFId(e.target.value)}
+                        placeholder="ID…"
+                        className="w-full rounded-md bg-white/90 text-black px-2 py-1"
                       />
-                    </div>
-                  </th>
-                  <th className="px-4 py-2">
-                    <div className="flex items-center gap-2">
-                      <select
-                        value={fBalCmp}
-                        onChange={(e) => setFBalCmp(e.target.value as Cmp)}
-                        className="w-16 rounded-md bg-white/90 text-black px-1 py-1"
-                        title="Compare"
-                      >
-                        <option value="<=">{'\u2264'}</option>
-                        <option value="=">=</option>
-                        <option value=">=">{'\u2265'}</option>
-                      </select>
+                    </th>,
+
+                    // Customer
+                    <th key="f-customer" className="px-4 py-2">
                       <input
-                        type="number"
-                        step="0.01"
-                        value={fBalVal}
-                        onChange={(e) => setFBalVal(e.target.value)}
-                        placeholder="$"
-                        className="w-28 rounded-md bg-white/90 text-black px-2 py-1"
+                        value={fCustomer}
+                        onChange={(e) => setFCustomer(e.target.value)}
+                        placeholder="Customer…"
+                        className="w-full rounded-md bg-white/90 text-black px-2 py-1"
                       />
-                    </div>
-                  </th>
-                  <th className="px-4 py-2">
-                    <select
-                      value={fStatus}
-                      onChange={(e) => setFStatus(e.target.value as any)}
-                      className="w-full rounded-md bg-white/90 text-black px-2 py-1"
-                    >
-                      <option value="all">All</option>
-                      {ORDER_FLOW.map((s) => (
-                        <option key={s} value={s}>
-                          {s.replace(/_/g, ' ')}
-                        </option>
-                      ))}
-                    </select>
-                  </th>
+                    </th>,
+
+                    // Company
+                    <th key="f-company" className="px-4 py-2">
+                      <input
+                        value={fCompany}
+                        onChange={(e) => setFCompany(e.target.value)}
+                        placeholder="Company…"
+                        className="w-full rounded-md bg-white/90 text-black px-2 py-1"
+                      />
+                    </th>,
+
+                    // Assignee
+                    <th key="f-assignee" className="px-4 py-2">
+                      <select
+                        value={fAssignee}
+                        onChange={(e) =>
+                          setFAssignee(e.target.value as 'all' | 'unassigned' | string)
+                        }
+                        className="w-full rounded-md bg-white/90 text-black px-2 py-1"
+                      >
+                        <option value="all">All</option>
+                        <option value="unassigned">Unassigned</option>
+                        {admins.map((a) => (
+                          <option key={a.uid} value={a.uid}>
+                            {a.username}
+                          </option>
+                        ))}
+                      </select>
+                    </th>,
+
+                    // Items text
+                    <th key="f-items" className="px-4 py-2">
+                      <input
+                        value={fItemsText}
+                        onChange={(e) => setFItemsText(e.target.value)}
+                        placeholder="Item text…"
+                        className="w-full rounded-md bg-white/90 text-black px-2 py-1"
+                      />
+                    </th>,
+
+                    // Total compare + value
+                    <th key="f-total" className="px-4 py-2">
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={fTotalCmp}
+                          onChange={(e) => setFTotalCmp(e.target.value as Cmp)}
+                          className="w-16 rounded-md bg-white/90 text-black px-1 py-1"
+                          title="Compare"
+                        >
+                          <option value="<=">{'\u2264'}</option>
+                          <option value="=">=</option>
+                          <option value=">=">{'\u2265'}</option>
+                        </select>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={fTotalVal}
+                          onChange={(e) => setFTotalVal(e.target.value)}
+                          placeholder="$"
+                          className="w-28 rounded-md bg-white/90 text-black px-2 py-1"
+                        />
+                      </div>
+                    </th>,
+
+                    // Balance compare + value
+                    <th key="f-balance" className="px-4 py-2">
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={fBalCmp}
+                          onChange={(e) => setFBalCmp(e.target.value as Cmp)}
+                          className="w-16 rounded-md bg-white/90 text-black px-1 py-1"
+                          title="Compare"
+                        >
+                          <option value="<=">{'\u2264'}</option>
+                          <option value="=">=</option>
+                          <option value=">=">{'\u2265'}</option>
+                        </select>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={fBalVal}
+                          onChange={(e) => setFBalVal(e.target.value)}
+                          placeholder="$"
+                          className="w-28 rounded-md bg-white/90 text-black px-2 py-1"
+                        />
+                      </div>
+                    </th>,
+
+                    // Status
+                    <th key="f-status" className="px-4 py-2">
+                      <select
+                        value={fStatus}
+                        onChange={(e) => setFStatus(e.target.value as any)}
+                        className="w-full rounded-md bg-white/90 text-black px-2 py-1"
+                      >
+                        <option value="all">All</option>
+                        {ORDER_FLOW.map((s) => (
+                          <option key={s} value={s}>
+                            {s.replace(/_/g, ' ')}
+                          </option>
+                        ))}
+                      </select>
+                    </th>,
+                  ]}
                 </tr>
               </thead>
 
               <tbody>
                 {filtered!.length === 0 ? (
                   <tr className="border-t border-white/10">
-                    <td colSpan={7} className="px-4 py-6 text-center opacity-75">
+                    <td colSpan={8} className="px-4 py-6 text-center opacity-75">
                       No matching orders — adjust filters above.
                     </td>
                   </tr>
@@ -274,9 +346,12 @@ export default function OrdersPage() {
                           </span>
                         </td>
                         <td className="px-4 py-3">
-                          <span className="underline decoration-dotted">{o.customerName}</span>
+                          <span className="underline decoration-dotted">
+                            {o.customerName}
+                          </span>
                         </td>
                         <td className="px-4 py-3">{o.company || '-'}</td>
+                        <td className="px-4 py-3">{o.assignedToName || '—'}</td>
                         <td className="px-4 py-3">
                           {firstItem}
                           {more > 0 && <span className="opacity-70"> (+{more} more)</span>}

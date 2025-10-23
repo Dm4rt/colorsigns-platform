@@ -46,6 +46,8 @@ export type Order = {
 
   status: OrderStatus;
   assignedToUid?: string | null;
+  assignedToName?: string | null;   // cache display name for convenience
+  assignedAt?: any;                 // serverTimestamp
 
   notes?: string;
 
