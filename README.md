@@ -151,3 +151,8 @@ Next.js Documentation
 Tailwind CSS Docs
 Firebase Docs
 Lucide React Docs
+
+
+//Changes
+Install csv-parse
+in data add your Styles.csv and Products.csv data from apparel supplier
