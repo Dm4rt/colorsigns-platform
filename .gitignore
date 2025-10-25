@@ -42,3 +42,5 @@ next-env.d.ts
 
 # sheet
 .xlsx*
+Products.csv
+Styles.csv
