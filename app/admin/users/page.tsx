@@ -321,31 +321,31 @@ function CreateUserModal({
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4">
-      <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
-        <h2 className="text-lg font-semibold mb-3">Create new user</h2>
-        <div className="flex flex-col gap-3">
+      <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl text-gray-900">
+        <h2 className="text-lg font-semibold mb-3 text-gray-900">Create new user</h2>
+        <div className="flex flex-col gap-3 text-gray-900">
           <input
-            className="border rounded-lg px-3 py-2"
+            className="border rounded-lg px-3 py-2 text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
             placeholder="Email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             type="email"
           />
           <input
-            className="border rounded-lg px-3 py-2"
+            className="border rounded-lg px-3 py-2 text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
             placeholder="Temporary password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             type="password"
           />
           <input
-            className="border rounded-lg px-3 py-2"
+            className="border rounded-lg px-3 py-2 text-gray-900 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500"
             placeholder="Username (optional)"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
           />
           <select
-            className="border rounded-lg px-3 py-2"
+            className="border rounded-lg px-3 py-2 text-gray-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
             value={role}
             onChange={(e) => setRole(e.target.value as Role)}
           >
@@ -357,7 +357,7 @@ function CreateUserModal({
         <div className="mt-5 flex gap-2 justify-end">
           <button
             onClick={onClose}
-            className="rounded-xl px-4 py-2 bg-black/10 hover:bg-black/20"
+            className="rounded-xl px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800"
             disabled={busy}
           >
             Cancel
@@ -371,11 +371,12 @@ function CreateUserModal({
           </button>
         </div>
 
-        <p className="text-xs text-black/60 mt-3">
+        <p className="text-xs text-gray-600 mt-3">
           Tip: if you haven’t deployed <code>adminCreateUser</code> yet, this will say it’s not
           found. See below for the function to add.
         </p>
       </div>
+
     </div>
   );
 }
