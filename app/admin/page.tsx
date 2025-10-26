@@ -43,7 +43,7 @@ export default function AdminPage() {
             href="/admin/users"
             className="rounded-md bg-white/10 px-5 py-2 font-semibold hover:bg-white/20"
           >
-            Manage Users (future)
+            Manage Users
           </Link>
 
           <Link
