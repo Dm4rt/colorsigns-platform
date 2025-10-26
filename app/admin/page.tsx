@@ -33,7 +33,12 @@ export default function AdminPage() {
           >
             Manage Orders
           </Link>
-
+          <Link
+            href="/admin/inventory"
+            className="rounded-md bg-white/10 px-5 py-2 font-semibold hover:bg-white/20"
+          >
+            Check Inventory
+          </Link>
           <Link
             href="/admin/users"
             className="rounded-md bg-white/10 px-5 py-2 font-semibold hover:bg-white/20"
