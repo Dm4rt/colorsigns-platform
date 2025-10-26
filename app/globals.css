@@ -33,3 +33,12 @@ body {
   height: 96px !important;
   object-fit: cover !important;
 }
+
+/* hide horizontal scrollbar for the thumbnail rail */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;  /* IE/Edge */
+  scrollbar-width: none;     /* Firefox */
+}

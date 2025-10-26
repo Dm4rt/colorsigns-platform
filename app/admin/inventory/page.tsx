@@ -1,10 +1,10 @@
 // app/admin/inventory/page.tsx
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
 
-type StyleHit = {
+type StyleResult = {
   styleID: number;
   brandName: string;
   styleName: string;
@@ -12,99 +12,99 @@ type StyleHit = {
   styleImage?: string;
 };
 
-const searchCache = new Map<string, StyleHit[]>();
-
 export default function InventorySearchPage() {
   const [q, setQ] = useState("");
-  const [results, setResults] = useState<StyleHit[]>([]);
   const [loading, setLoading] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
+  const [results, setResults] = useState<StyleResult[]>([]);
+
+  // simple debounce
+  const debouncedQ = useDebounce(q, 200);
 
   useEffect(() => {
-    const s = q.trim();
-    if (s.length < 2) {
-      setResults([]);
-      return;
-    }
-
-    const cached = searchCache.get(s);
-    if (cached) {
-      setResults(cached);
-      return;
-    }
-
-    setLoading(true);
-    const t = setTimeout(async () => {
-      abortRef.current?.abort();
-      const ac = new AbortController();
-      abortRef.current = ac;
-
+    let active = true;
+    const run = async () => {
+      if (!debouncedQ.trim()) {
+        setResults([]);
+        return;
+      }
+      setLoading(true);
       try {
-        const res = await fetch(`/api/styles/search?q=${encodeURIComponent(s)}`, {
-          signal: ac.signal,
-          cache: "no-store",
-        });
-        const data = await res.json();
-        const arr: StyleHit[] = Array.isArray(data) ? data : (data?.results ?? []);
-        searchCache.set(s, arr);
-        setResults(arr);
-      } catch {
+        const r = await fetch(`/api/styles/search?q=${encodeURIComponent(debouncedQ)}`);
+        const { results } = await r.json();
+        if (!active) return;
+        setResults(results || []);
+      } catch (e) {
+        if (!active) return;
         setResults([]);
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
-    }, 300);
-
-    return () => clearTimeout(t);
-  }, [q]);
+    };
+    run();
+    return () => {
+      active = false;
+    };
+  }, [debouncedQ]);
 
   return (
-    <main className="max-w-5xl mx-auto p-6">
-      <h1 className="text-3xl font-semibold mb-4">Inventory Lookup</h1>
+    <div className="max-w-6xl mx-auto px-4 py-10">
+      <h1 className="text-3xl font-bold mb-6">Inventory Lookup</h1>
 
       <input
         value={q}
         onChange={(e) => setQ(e.target.value)}
         placeholder="Gildan 3000"
-        className="w-full rounded border px-4 py-3 text-lg mb-6"
+        className="w-full rounded-lg border border-white/30 bg-white/10 px-4 py-3 outline-none focus:ring-2 focus:ring-emerald-400"
       />
 
-      {loading && <div className="opacity-60 mb-4">Searching…</div>}
+      {loading && <div className="opacity-70 text-sm mt-3">Searching…</div>}
 
-      <ul className="space-y-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mt-6">
         {results.map((r) => (
-          <li
+          <div
             key={r.styleID}
-            className="border rounded-lg p-3 flex items-center gap-4"
+            className="bg-teal-900/20 rounded-2xl p-4 shadow hover:shadow-lg hover:-translate-y-1 transition-all duration-200 flex flex-col"
           >
-            {r.styleImage ? (
-              <img
-                src={r.styleImage}
-                alt={r.title || `${r.brandName} ${r.styleName}`}
-                className="w-16 h-16 object-cover rounded"
-              />
-            ) : (
-              <div className="w-16 h-16 rounded bg-gray-300/40 flex items-center justify-center text-xs">
-                No Image
-              </div>
-            )}
-
-            <div className="flex-1 min-w-0">
-              <div className="font-semibold">
-                {r.brandName} {r.styleName}
-              </div>
-              <div className="text-sm opacity-80 truncate">{r.title}</div>
+            <div className="w-full h-64 rounded-xl overflow-hidden bg-white/10 mb-4">
+              {r.styleImage ? (
+                <img
+                  src={r.styleImage.startsWith("http") ? r.styleImage : `https://www.ssactivewear.com/${r.styleImage}`}
+                  alt={`${r.brandName} ${r.styleName}`}
+                  className="w-full h-full object-cover"
+                  onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
+                />
+              ) : (
+                <div className="w-full h-full grid place-items-center text-white/70">
+                  No Image
+                </div>
+              )}
             </div>
 
-            <Link
-              href={`/admin/inventory/${r.styleID}`}
-              className="shrink-0 inline-flex items-center px-3 py-2 rounded bg-emerald-600 text-white hover:brightness-110"
-            >
-              View Inventory
-            </Link>
-          </li>
+            <div className="flex-1">
+              <h2 className="font-bold text-lg">{r.brandName} {r.styleName}</h2>
+              <p className="text-sm opacity-80">{r.title ?? ""}</p>
+            </div>
+
+            <div className="pt-4">
+              <Link
+                href={`/admin/inventory/${r.styleID}`}
+                className="inline-flex items-center justify-center rounded-md bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 transition"
+              >
+                View Inventory
+              </Link>
+            </div>
+          </div>
         ))}
-      </ul>
-    </main>
+      </div>
+    </div>
   );
+}
+
+function useDebounce<T>(value: T, delay = 250) {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), delay);
+    return () => clearTimeout(t);
+  }, [value, delay]);
+  return v;
 }

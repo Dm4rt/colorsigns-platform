@@ -1,7 +1,7 @@
-// lib/productsRepo.ts
-import path from "path";
 import fs from "fs";
+import path from "path";
 
+/** Shape of a parsed Products.csv row (only the fields we actually use) */
 export type ProductRow = {
   sku: string;
   gtin: string;
@@ -18,6 +18,7 @@ export type ProductRow = {
 
   colorSwatchImage?: string;
   colorSwatchTextColor?: string;
+
   colorFrontImage?: string;
   colorSideImage?: string;
   colorBackImage?: string;
@@ -44,141 +45,196 @@ export type ProductRow = {
   customerPrice?: number;
 };
 
-type RepoShape = {
-  products: ProductRow[];
-  byStyleSkuMap: Map<number, Map<string, ProductRow>>;
-};
+let PRODUCTS: ProductRow[] = [];
+let LOADED = false;
 
-const g = globalThis as unknown as { __PRODUCTS_REPO?: RepoShape };
-
-let REPO: RepoShape | undefined = g.__PRODUCTS_REPO;
-
-function parseLine(line: string, delim: string): string[] {
+function csvParseLine(line: string): string[] {
   const out: string[] = [];
-  let cur = "", i = 0, inQuotes = false;
-  while (i < line.length) {
+  let cur = "";
+  let q = false;
+  for (let i = 0; i < line.length; i++) {
     const ch = line[i];
-    if (inQuotes) {
-      if (ch === '"') {
-        if (line[i + 1] === '"') { cur += '"'; i += 2; continue; }
-        inQuotes = false; i += 1; continue;
+    if (ch === '"') {
+      if (q && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else {
+        q = !q;
       }
-      cur += ch; i += 1; continue;
-    } else {
-      if (ch === '"') { inQuotes = true; i += 1; continue; }
-      if (ch === delim) { out.push(cur); cur = ""; i += 1; continue; }
-      cur += ch; i += 1;
+      continue;
     }
+    if (!q && ch === ",") {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += ch;
   }
   out.push(cur);
-  return out.map((s) => s.trim());
+  return out;
 }
 
-function detectDelimiter(headerLine: string): string {
-  const c = (re: RegExp) => (headerLine.match(re) || []).length;
-  const cand: Array<[string, number]> = [[",", c(/,/g)], ["\t", c(/\t/g)], [";", c(/;/g)], ["|", c(/\|/g)]];
-  cand.sort((a,b) => b[1] - a[1]);
-  return cand[0][1] > 0 ? cand[0][0] : ",";
+function normalizeUrl(v?: string | null): string | null {
+  if (!v) return null;
+  const s = v.trim();
+  if (!s) return null;
+  if (/^https?:\/\//i.test(s)) return s;
+  if (/^images\//i.test(s)) {
+    return `https://www.ssactivewear.com/${s}`;
+  }
+  if (/^\/?images\//i.test(s)) {
+    return `https://www.ssactivewear.com/${s.replace(/^\//, "")}`;
+  }
+  return null;
 }
 
-function loadOnce(): RepoShape {
-  if (REPO) return REPO;
+/** Load Products.csv once per runtime */
+export function ensureProductsLoaded() {
+  if (LOADED) return;
+  const p = path.join(process.cwd(), "data", "Products.csv");
+  const text = fs.readFileSync(p, "utf8");
+  const lines = text.trim().split(/\r?\n/);
+  const headers = csvParseLine(lines.shift() || "");
 
-  const fileCsv = path.join(process.cwd(), "data", "Products.csv");
-  if (!fs.existsSync(fileCsv)) {
-    console.warn(`[productsRepo] ⚠️ Products.csv not found at ${fileCsv}`);
-    REPO = { products: [], byStyleSkuMap: new Map() };
-    g.__PRODUCTS_REPO = REPO;
-    return REPO;
-  }
+  const rows: ProductRow[] = lines.map((ln) => {
+    const cols = csvParseLine(ln);
+    const rec: any = {};
+    headers.forEach((h, i) => (rec[h] = cols[i]));
+    const row: ProductRow = {
+      sku: rec["sku"],
+      gtin: rec["gtin"],
+      skuID_Master: Number(rec["skuID_Master"]),
+      styleID: Number(rec["styleID"]),
+      brandName: rec["brandName"],
+      styleName: rec["styleName"],
 
-  let content = fs.readFileSync(fileCsv, "utf8");
-  if (content.charCodeAt(0) === 0xfeff) content = content.slice(1);
+      colorName: rec["colorName"],
+      colorCode: rec["colorCode"],
+      colorPriceCodeName: rec["colorPriceCodeName"],
+      colorGroup: rec["colorGroup"],
+      colorFamily: rec["colorFamily"],
 
-  const lines = content.split(/\r?\n/).filter(Boolean);
-  if (lines.length <= 1) {
-    console.warn("[productsRepo] ⚠️ Products.csv is empty or missing headers");
-    REPO = { products: [], byStyleSkuMap: new Map() };
-    g.__PRODUCTS_REPO = REPO;
-    return REPO;
-  }
+      colorSwatchImage: rec["colorSwatchImage"],
+      colorSwatchTextColor: rec["colorSwatchTextColor"],
 
-  const delim = detectDelimiter(lines[0]);
-  const headers = parseLine(lines[0], delim).map((h) => h.trim().toLowerCase());
-  const idx = (n: string) => headers.indexOf(n.toLowerCase());
-  const get = (cols: string[], n: string) => (idx(n) >= 0 ? cols[idx(n)] ?? "" : "");
-  const num = (v: string) => { const n = Number(v); return Number.isFinite(n) ? n : undefined; };
+      colorFrontImage: rec["colorFrontImage"],
+      colorSideImage: rec["colorSideImage"],
+      colorBackImage: rec["colorBackImage"],
+      colorDirectSideImage: rec["colorDirectSideImage"],
+      colorOnModelFrontImage: rec["colorOnModelFrontImage"],
+      colorOnModelSideImage: rec["colorOnModelSideImage"],
+      colorOnModelBackImage: rec["colorOnModelBackImage"],
 
-  const products: ProductRow[] = [];
-  const byStyleSkuMap = new Map<number, Map<string, ProductRow>>();
+      color1: rec["color1"],
+      color2: rec["color2"],
 
-  for (let i = 1; i < lines.length; i++) {
-    const cols = parseLine(lines[i], delim);
-    const rec: ProductRow = {
-      sku: get(cols, "sku"),
-      gtin: get(cols, "gtin"),
-      skuID_Master: Number(get(cols, "skuid_master")) || 0,
-      styleID: Number(get(cols, "styleid")) || 0,
-      brandName: get(cols, "brandname"),
-      styleName: get(cols, "stylename"),
-      colorName: get(cols, "colorname"),
-      colorCode: get(cols, "colorcode"),
-      colorPriceCodeName: get(cols, "colorpricecodename"),
-      colorGroup: get(cols, "colorgroup"),
-      colorFamily: get(cols, "colorfamily"),
-      colorSwatchImage: get(cols, "colorswatchimage"),
-      colorSwatchTextColor: get(cols, "colorswatchtextcolor"),
-      colorFrontImage: get(cols, "colorfrontimage"),
-      colorSideImage: get(cols, "colorsideimage"),
-      colorBackImage: get(cols, "colorbackimage"),
-      colorDirectSideImage: get(cols, "colordirectsideimage"),
-      colorOnModelFrontImage: get(cols, "coloronmodelfrontimage"),
-      colorOnModelSideImage: get(cols, "coloronmodelsideimage"),
-      colorOnModelBackImage: get(cols, "coloronmodelbackimage"),
-      color1: get(cols, "color1"),
-      color2: get(cols, "color2"),
-      sizeName: get(cols, "sizename"),
-      sizeCode: get(cols, "sizecode"),
-      sizeOrder: get(cols, "sizeorder"),
-      sizePriceCodeName: get(cols, "sizepricecodename"),
-      caseQty: num(get(cols, "caseqty")),
-      unitWeight: num(get(cols, "unitweight")),
-      MAPPrice: num(get(cols, "mapprice")),
-      piecePrice: num(get(cols, "pieceprice")),
-      dozenPrice: num(get(cols, "dozenprice")),
-      casePrice: num(get(cols, "caseprice")),
-      salePrice: num(get(cols, "saleprice")),
-      customerPrice: num(get(cols, "customerprice")),
+      sizeName: rec["sizeName"],
+      sizeCode: rec["sizeCode"],
+      sizeOrder: rec["sizeOrder"],
+      sizePriceCodeName: rec["sizePriceCodeName"],
+
+      caseQty: Number(rec["CaseQty"]),
+      unitWeight: Number(rec["unitWeight"]),
+      MAPPrice: Number(rec["MAPPrice"]),
+      piecePrice: Number(rec["piecePrice"]),
+      dozenPrice: Number(rec["dozenPrice"]),
+      casePrice: Number(rec["casePrice"]),
+      salePrice: Number(rec["salePrice"]),
+      customerPrice: Number(rec["customerPrice"]),
     };
-    if (!rec.styleID || !rec.sku) continue;
-    products.push(rec);
+    return row;
+  });
 
-    let m = byStyleSkuMap.get(rec.styleID);
-    if (!m) { m = new Map(); byStyleSkuMap.set(rec.styleID, m); }
-    m.set(rec.sku, rec);
+  PRODUCTS = rows;
+  LOADED = true;
+  console.log(`[productsRepo] ✅ Ready: ${PRODUCTS.length} rows (delimiter ",")`);
+}
+
+/** All products for a given styleID */
+export function getProductsByStyleID(styleID: number) {
+  ensureProductsLoaded();
+  return PRODUCTS.filter((r) => r.styleID === Number(styleID));
+}
+
+/** Colors available in a style (unique, in CSV order) */
+export function listColorsForStyle(styleID: number): string[] {
+  return Array.from(
+    new Set(getProductsByStyleID(styleID).map((r) => r.colorName).filter(Boolean))
+  );
+}
+
+/** Build a fast “color → rows[]” map for a style */
+export function getSkuMapForStyle(styleID: number) {
+  const rows = getProductsByStyleID(styleID);
+  const map = new Map<string, ProductRow[]>();
+  for (const r of rows) {
+    const key = (r.colorName || "").trim();
+    if (!key) continue;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(r);
+  }
+  return map;
+}
+
+/** Preferred order of image fields (from best to fallback) */
+const IMAGE_FIELDS: (keyof ProductRow)[] = [
+  "colorOnModelFrontImage",
+  "colorOnModelSideImage",
+  "colorOnModelBackImage",
+  "colorFrontImage",
+  "colorSideImage",
+  "colorBackImage",
+  "colorDirectSideImage",
+];
+
+/** Collect and dedupe image URLs from one row */
+function collectImageUrlsFromRow(row: ProductRow): string[] {
+  const urls: string[] = [];
+
+  for (const f of IMAGE_FIELDS) {
+    const raw = row[f] as unknown;
+    const n = normalizeUrl(typeof raw === "string" ? raw : null);
+    if (n && /\.(png|jpe?g|webp)$/i.test(n) && !urls.includes(n)) {
+      urls.push(n);
+    }
   }
 
-  console.log(`[productsRepo] ✅ Ready: ${products.length} rows (delimiter "${delim}")`);
-  REPO = { products, byStyleSkuMap };
-  g.__PRODUCTS_REPO = REPO;
-  return REPO;
+  // Be generous: any key that ends with "Image"
+  for (const [k, v] of Object.entries(row) as [string, unknown][]) {
+    if (/image$/i.test(k) && typeof v === "string") {
+      const n = normalizeUrl(v);
+      if (n && /\.(png|jpe?g|webp)$/i.test(n) && !urls.includes(n)) {
+        urls.push(n);
+      }
+    }
+  }
+  return urls;
 }
 
-export function getProductsByStyleID(styleID: number | string): ProductRow[] {
-  const repo = loadOnce();
-  const id = Number(styleID);
-  return repo.products.filter((p) => p.styleID === id);
-}
+/**
+ * Get a gallery for a color with STYLE-LEVEL fallback:
+ *  - first: images from the color’s own rows
+ *  - then: any images from other colors of the same style
+ */
+export function imagesForColorWithFallback(
+  colorRows: ProductRow[],
+  allStyleRows: ProductRow[]
+): string[] {
+  const out: string[] = [];
 
-export function listColorsForStyle(styleID: number | string): string[] {
-  const rows = getProductsByStyleID(styleID);
-  const colors: string[] = [];
-  for (const r of rows) if (r.colorName && !colors.includes(r.colorName)) colors.push(r.colorName);
-  return colors;
-}
+  // 1) Color rows
+  for (const r of colorRows) {
+    for (const u of collectImageUrlsFromRow(r)) {
+      if (!out.includes(u)) out.push(u);
+    }
+  }
+  if (out.length > 0) return out;
 
-/** Fast lookup: sku -> ProductRow (for a given style) */
-export function getSkuMapForStyle(styleID: number | string): Map<string, ProductRow> {
-  const repo = loadOnce();
-  return repo.byStyleSkuMap.get(Number(styleID)) ?? new Map();
+  // 2) Fallback to any image in this style
+  for (const r of allStyleRows) {
+    for (const u of collectImageUrlsFromRow(r)) {
+      if (!out.includes(u)) out.push(u);
+    }
+  }
+  return out;
 }
